@@ -1,0 +1,20 @@
+# Build output and local tooling state.
+.pio/
+build/
+*.o
+*.d
+*.a
+*.elf
+*.bin
+*.map
+
+# Local editor and operating-system metadata.
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Arduino temporary output.
+*.tmp
+*.bak

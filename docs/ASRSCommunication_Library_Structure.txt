@@ -1,0 +1,49 @@
+ASRS COMMUNICATION ARDUINO LIBRARY STRUCTURE
+============================================
+
+Purpose
+-------
+This folder is packaged as an Arduino-compatible library while remaining usable as a PlatformIO project library. The reusable communication protocol implementation is kept under src/ and is independent from the example firmware entry points.
+
+Library Root
+------------
+ASRSCommunication/
+
+Required Arduino library files:
+
+library.properties
+    Declares the library name, version, author metadata, category, supported architectures, and public include headers for the Arduino IDE.
+
+library.json
+    Declares equivalent metadata for PlatformIO registry or Git-based use.
+
+README.md
+    Describes installation, usage, architecture, and versioning policy.
+
+keywords.txt
+    Provides Arduino IDE syntax highlighting hints.
+
+src/ASRSCommunication.h
+    Convenience include header for applications that want one public library include.
+
+src/
+    Contains the reusable protocol, frame codec, transport, and role-layer implementation.
+
+examples/
+    Contains Arduino IDE compatible example sketches.
+
+    Master_UART_Arduino/
+        UART master example for Arduino boards with fixed HardwareSerial pins, such as Arduino Uno R4.
+
+    Master_UART_ESP32/
+        UART master example for ESP32-S3 boards using explicit GPIO assignments.
+
+Compatibility Notes
+-------------------
+The library is intended to support both PlatformIO and Arduino IDE users. PlatformIO can consume this Arduino-style library directly from a project lib/ directory or from a Git repository. Arduino IDE users can copy the ASRSCommunication folder into Documents/Arduino/libraries/.
+
+The VL53L1X_Manager helper is optional and is compiled only when the SparkFun VL53L1X library header is available. This prevents a master-only communication project from requiring the sensor dependency.
+
+Versioning
+----------
+The initial packaged library version is 0.1.0. Minor version updates should be used for backward-compatible additions. Major version updates should be used when packet layout, command values, payload definitions, or public API behaviour are changed incompatibly.

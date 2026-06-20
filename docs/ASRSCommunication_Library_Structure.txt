@@ -28,6 +28,18 @@ src/ASRSCommunication.h
 
 src/
     Contains the reusable protocol, frame codec, transport, and role-layer implementation.
+    ASRS_Comm_ESPNow also supports optional dynamic pairing. The master broadcasts ASRS_CMD_PAIR_REQUEST, and the slave accepts it only when ESP-NOW mode is selected and no master has already been paired. The slave responds with ASRS_CMD_PAIR_ACK. The learned master MAC address may be held in RAM only for shared-laboratory use, or stored in ESP32 non-volatile storage for a dedicated deployment.
+    ASRS_Comm_ESPNow registers ESP-NOW receive and send callbacks. The send callback records delivery success, consecutive delivery failures, and elapsed time since the last successful delivery so application firmware can report likely peer loss.
+    A master may call restartPairingMaster() after peer loss. This returns the master transport to broadcast pairing mode without reinitialising ESP-NOW, which supports recovery when a RAM-only paired slave resets.
+
+src/session/
+    Contains reusable ESP-NOW session managers.
+
+    ASRS_ESPNow_MasterSession manages master-side pairing, peer activity timeout detection, and automatic re-pairing.
+
+    ASRS_ESPNow_SlaveSession manages slave-side DIP-gated pairing and peer activity timeout reporting.
+
+    Future application firmware should call the relevant session begin() method from setup(), call update() from loop(), and call recordPeerActivity() when a valid application-level packet is received from the paired peer.
 
 examples/
     Contains Arduino IDE compatible example sketches.
@@ -38,6 +50,12 @@ examples/
     Master_UART_ESP32/
         UART master example for ESP32-S3 boards using explicit GPIO assignments.
 
+    Slave/
+        DIP-selected slave reference example. On ESP32 boards, GPIO2 HIGH selects ESP-NOW and GPIO2 LOW selects UART. On non-ESP32 boards, the example uses UART.
+
+    Master_ESPNow/
+        ESP-NOW master example using ASRS_ESPNow_MasterSession dynamic pairing.
+
 Compatibility Notes
 -------------------
 The library is intended to support both PlatformIO and Arduino IDE users. PlatformIO can consume this Arduino-style library directly from a project lib/ directory or from a Git repository. Arduino IDE users can copy the ASRSCommunication folder into Documents/Arduino/libraries/.
@@ -47,3 +65,17 @@ The VL53L1X_Manager helper is optional and is compiled only when the SparkFun VL
 Versioning
 ----------
 The initial packaged library version is 0.1.0. Minor version updates should be used for backward-compatible additions. Major version updates should be used when packet layout, command values, payload definitions, or public API behaviour are changed incompatibly.
+
+Protocol Commands Added for ESP-NOW Pairing
+-------------------------------------------
+ASRS_CMD_PAIR_REQUEST = 0x40
+    ESP-NOW master requests dynamic pairing.
+    Payload length: 4 bytes.
+    Payload: ASCII pairing marker "ASRS".
+
+ASRS_CMD_PAIR_ACK = 0x41
+    ESP-NOW slave confirms dynamic pairing.
+    Payload length: 4 bytes.
+    Payload: ASCII pairing marker "ASRS".
+
+These commands do not change the frame synchronization bytes, protocol version, CRC-16/CCITT calculation, byte order, or existing command payload definitions.

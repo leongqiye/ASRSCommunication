@@ -11,6 +11,7 @@ public:
   bool requestLimitSwitches(ASRS_LimitSwitches &limits, uint32_t timeoutMs = ASRS_DEFAULT_TIMEOUT_MS);
   bool sendTravelCommand(int32_t xDistance, int32_t zDistance, uint32_t timeoutMs = ASRS_DEFAULT_TIMEOUT_MS);
   bool readOperationStatus(ASRS_OperationStatus &status);
+  bool sendHomingCommand(bool xHome, bool zHome, uint32_t timeoutMs = ASRS_DEFAULT_TIMEOUT_MS);
   ASRS_Error lastError() const;
 
 private:

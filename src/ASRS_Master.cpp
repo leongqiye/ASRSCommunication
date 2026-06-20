@@ -74,6 +74,35 @@ bool ASRS_Master::readOperationStatus(ASRS_OperationStatus &status) {
   return false;
 }
 
+bool ASRS_Master::sendHomingCommand(bool xHome, bool zHome, uint32_t timeoutMs = ASRS_DEFAULT_TIMEOUT_MS){
+  uint8_t homeMask = 0;
+  if(xHome){
+    homeMask |= ASRS_HOME_X_AXIS;
+  }
+
+  if(zHome){
+    homeMask |= ASRS_HOME_Z_AXIS;
+  }
+
+  if(homeMask == 0){
+    _lastError = ASRS_ERROR_INVALID_HOMING_REQUEST;
+    return false;
+  }
+
+  ASRS_Packet command = makePacket(ASRS_CMD_RETURN_HOME);
+  command.len = 1;
+  command.data[0] = homeMask;
+
+  if(!_communication->sendPacket(command)){
+    _lastError = _communication->lastError();
+    return false;
+  }
+
+  ASRS_Packet acknowledgement;
+  return waitForPacket(ASRS_CMD_ACK, acknowledgement, timeoutMs);
+
+}
+
 ASRS_Error ASRS_Master::lastError() const {
   return _lastError;
 }

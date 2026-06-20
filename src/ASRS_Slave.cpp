@@ -11,6 +11,7 @@ ASRS_Slave::ASRS_Slave(ASRS_Comm_Base &selectedCommunication, uint8_t nodeId)
   _limits = {false, false, false, false};
   _status = {ASRS_STATUS_IDLE, ASRS_ERROR_NONE, 0};
   _travelCommand = {0, 0};
+  _homingCommand = {false, false};
 }
 
 void ASRS_Slave::setWrongModeCommunication(ASRS_Comm_Base &communication) {
@@ -58,6 +59,20 @@ bool ASRS_Slave::readTravelCommand(ASRS_TravelCommand &command) {
   return true;
 }
 
+bool ASRS_Slave::homingCommandAvailable() const{
+  return _hasHomingCommand;
+}
+
+bool ASRS_Slave::readHomingCommand(ASRS_HomingCommand &command){
+  if(!_hasHomingCommand){
+    return false;
+  }
+
+  command = _homingCommand;
+  //set the hashomingcommand attribute to false for future command.
+  _hasHomingCommand = false;
+  return true;
+}
 ASRS_Error ASRS_Slave::lastError() const {
   return _lastError;
 }
@@ -115,6 +130,32 @@ void ASRS_Slave::processPacket(ASRS_Comm_Base &communication, ASRS_Packet &packe
       _hasTravelCommand = true;
       sendAcknowledgement(communication, packet.seq);
       break;
+    
+    case ASRS_CMD_RETURN_HOME:{
+      if(packet.len != 1){
+        sendError(communication, ASRS_ERROR_PAYLOAD_LENGTH,packet.seq);
+        _lastError = ASRS_ERROR_PAYLOAD_LENGTH;
+        return;
+      }
+
+      const uint8_t homeMask = packet.data[0];
+
+      if(homeMask == 0 || (homeMask & ~ASRS_HOME_VALID_MASK)!=0){
+        //~ASRS_HOME_VALID_MASK = 1111 1100
+        //hence, 0x01,0x02,0x03 can produce 0000 0000 after bitwise AND
+        //that is valid homeMask.
+        sendError(communication, ASRS_ERROR_INVALID_HOMING_REQUEST,packet.seq);
+        _lastError = ASRS_ERROR_INVALID_HOMING_REQUEST;
+        return;
+      }
+      _homingCommand.xHome = (homeMask & ASRS_HOME_X_AXIS) !=0;
+      _homingCommand.zHome = (homeMask & ASRS_HOME_Z_AXIS) !=0;
+      _hasHomingCommand = true;
+      
+      sendAcknowledgement(communication,packet.seq);
+      _lastError = ASRS_ERROR_NONE;
+      break;
+    }
 
     default:
       sendError(communication, ASRS_ERROR_UNKNOWN_COMMAND, packet.seq);

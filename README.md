@@ -97,8 +97,8 @@ On ESP32-S3 boards, pass explicit UART pins to `begin()`. On Arduino boards with
 | `Master_UART_Arduino` | Arduino boards with fixed `Serial1` pins, such as Arduino Uno R4 | UART |
 | `Master_UART_ESP32` | ESP32 or ESP32-S3 boards with configurable UART pins | UART |
 | `Master_UART` | Generic UART master reference | UART |
-| `Slave_UART` | UART slave reference | UART |
-| `Master_ESPNow` | ESP32 or ESP32-S3 boards only | ESP-NOW |
+| `Slave` | DIP-selected slave reference; GPIO2 HIGH selects ESP-NOW and GPIO2 LOW selects UART on ESP32 boards | UART or ESP-NOW |
+| `Master_ESPNow` | ESP32 or ESP32-S3 boards only; uses dynamic ESP-NOW pairing | ESP-NOW |
 
 For Arduino Uno R4, `Serial1` uses D0 as RX and D1 as TX. For the ESP32-S3 example, the default assignment is GPIO18 as RX and GPIO17 as TX.
 

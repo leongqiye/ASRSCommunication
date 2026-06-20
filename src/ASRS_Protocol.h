@@ -9,6 +9,9 @@
 #define ASRS_DEFAULT_NODE_ID 1
 #define ASRS_DEFAULT_TIMEOUT_MS 250
 
+constexpr uint8_t ASRS_HOME_X_AXIS = 0x01;
+constexpr uint8_t ASRS_HOME_Z_AXIS = 0x02;
+constexpr uint8_t ASRS_HOME_VALID_MASK = ASRS_HOME_X_AXIS | ASRS_HOME_Z_AXIS;
 //medium for communication:
 //UART or ESPNOW
 enum ASRS_Medium : uint8_t {
@@ -22,9 +25,14 @@ enum ASRS_Command : uint8_t {
   ASRS_CMD_RESP_COORDINATES = 0x11,
   ASRS_CMD_REQ_LIMITS = 0x12,
   ASRS_CMD_RESP_LIMITS = 0x13,
+
   ASRS_CMD_SET_MOVE = 0x20,
   ASRS_CMD_ACK = 0x21,
+  ASRS_CMD_RETURN_HOME = 0x22, //homing command
+
   ASRS_CMD_STATUS = 0x30,
+  ASRS_CMD_PAIR_REQUEST = 0x40,
+  ASRS_CMD_PAIR_ACK = 0x41,
   ASRS_CMD_ERROR = 0x7F
 };
 
@@ -46,7 +54,8 @@ enum ASRS_Error : uint8_t {
   ASRS_ERROR_PAYLOAD_LENGTH = 4,
   ASRS_ERROR_ESPNOW_NOT_AVAILABLE = 5,
   ASRS_ERROR_UNKNOWN_COMMAND = 6,
-  ASRS_ERROR_TIMEOUT = 7
+  ASRS_ERROR_TIMEOUT = 7,
+  ASRS_ERROR_INVALID_HOMING_REQUEST = 8
 };
 
 //data packet of the asrs communication
@@ -85,6 +94,10 @@ struct ASRS_OperationStatus {
   uint8_t warningCode;
 };
 
+struct ASRS_HomingCommand{
+  bool xHome;
+  bool zHome;
+};
 inline void asrsClearPacket(ASRS_Packet &packet) {
   packet.id = ASRS_DEFAULT_NODE_ID;
   packet.cmd = 0;
@@ -126,9 +139,9 @@ inline const char *asrsStatusName(ASRS_Status status) {
   switch (status) {
     case ASRS_STATUS_DONE:
       return "Done";
-    case ASRS_STATUS_ERROR:
+    case ASRS_STATUS_ERROR: //link the error to the actual error( timeout, lost connection, wrong mode ,etc)
       return "Error";
-    case ASRS_STATUS_WARNING:
+    case ASRS_STATUS_WARNING://describe what the warning actual is
       return "Warning";
     case ASRS_STATUS_BUSY:
       return "Busy";
@@ -158,9 +171,23 @@ inline const char *asrsErrorName(ASRS_Error error) {
       return "Unknown command";
     case ASRS_ERROR_TIMEOUT:
       return "Timeout";
+    case ASRS_ERROR_INVALID_HOMING_REQUEST:
+      return "Invalid homing request";
     default:
       return "Unknown error";
   }
+}
+
+//print the complete ASRS operation status to an Arduino-compatible stream.
+inline void asrsPrintOperationStatus(Print &stream, const ASRS_OperationStatus &status) {
+  stream.print("Operation status: ");
+  stream.print(asrsStatusName(status.status));
+  if (status.status == ASRS_STATUS_ERROR) {
+    stream.print(": ");
+    stream.print(asrsErrorName(status.error));
+  }
+  stream.print(", warning code = ");
+  stream.println(status.warningCode);
 }
 
 #endif

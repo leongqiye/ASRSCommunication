@@ -7,7 +7,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-
+// add in the average ( read multiple time and filter the noise) or kalman filter
 #if __has_include("SparkFun_VL53L1X.h")
 #include "SparkFun_VL53L1X.h"
 #define ASRS_HAS_SPARKFUN_VL53L1X 1

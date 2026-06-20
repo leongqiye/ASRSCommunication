@@ -17,6 +17,9 @@ public:
 
   bool travelCommandAvailable() const;
   bool readTravelCommand(ASRS_TravelCommand &command);
+  bool homingCommandAvailable() const;
+  bool readHomingCommand(ASRS_HomingCommand &command);
+
   ASRS_Error lastError() const;
 
 private:
@@ -29,8 +32,12 @@ private:
   ASRS_Coordinates _coordinates;
   ASRS_LimitSwitches _limits;
   ASRS_OperationStatus _status;
+  //for handling travel command from master
   ASRS_TravelCommand _travelCommand;
   bool _hasTravelCommand;
+  //for handling homing command from master
+  ASRS_HomingCommand _homingCommand;
+  bool _hasHomingCommand;
 
   void processSelectedCommunication();
   void processWrongModeCommunication();

@@ -31,6 +31,7 @@ static void requestCoordinates() {
   }
 }
 
+//update tp readLimitSwitches
 static void requestLimitSwitches() {
   ASRS_LimitSwitches limits;
   if (master.requestLimitSwitches(limits)) {

@@ -4,10 +4,20 @@ ASRS_Master::ASRS_Master(ASRS_Comm_Base &communication, uint8_t nodeId)
   : _communication(&communication),
     _nodeId(nodeId),
     _sequenceCounter(1),
-    _lastError(ASRS_ERROR_NONE) {
+    _lastError(ASRS_ERROR_NONE),
+    _operationActive(false),
+    _activeOperationSequence(0),
+    _activeOperationCommand(static_cast<ASRS_Command>(0)),
+    _coordinates{0, 0},
+    _hasCoordinates(false) {
 }
 
 bool ASRS_Master::requestCoordinates(ASRS_Coordinates &coordinates, uint32_t timeoutMs) {
+  if (_operationActive) {
+    _lastError = ASRS_ERROR_MASTER_BUSY;
+    return false;
+  }
+
   //make a packet of request coordinate.
   ASRS_Packet request = makePacket(ASRS_CMD_REQ_COORDINATES);
   //if sendPacket success, would skip below block of code.
@@ -17,7 +27,7 @@ bool ASRS_Master::requestCoordinates(ASRS_Coordinates &coordinates, uint32_t tim
   }
   //create a response packet.
   ASRS_Packet response;
-  if (!waitForPacket(ASRS_CMD_RESP_COORDINATES, response, timeoutMs)) {
+  if (!waitForPacket(ASRS_CMD_RESP_COORDINATES,request.seq, response, timeoutMs)) {
     return false;
   }
 
@@ -25,6 +35,11 @@ bool ASRS_Master::requestCoordinates(ASRS_Coordinates &coordinates, uint32_t tim
 }
 
 bool ASRS_Master::requestLimitSwitches(ASRS_LimitSwitches &limits, uint32_t timeoutMs) {
+  if (_operationActive) {
+    _lastError = ASRS_ERROR_MASTER_BUSY;
+    return false;
+  }
+
   ASRS_Packet request = makePacket(ASRS_CMD_REQ_LIMITS);
 
   if (!_communication->sendPacket(request)) {
@@ -33,7 +48,7 @@ bool ASRS_Master::requestLimitSwitches(ASRS_LimitSwitches &limits, uint32_t time
   }
 
   ASRS_Packet response;
-  if (!waitForPacket(ASRS_CMD_RESP_LIMITS, response, timeoutMs)) {
+  if (!waitForPacket(ASRS_CMD_RESP_LIMITS, request.seq,response, timeoutMs)) {
     return false;
   }
 
@@ -41,6 +56,11 @@ bool ASRS_Master::requestLimitSwitches(ASRS_LimitSwitches &limits, uint32_t time
 }
 
 bool ASRS_Master::sendTravelCommand(int32_t xDistance, int32_t zDistance, uint32_t timeoutMs) {
+  if (_operationActive) {
+    _lastError = ASRS_ERROR_MASTER_BUSY;
+    return false;
+  }
+
   ASRS_Packet command = makePacket(ASRS_CMD_SET_MOVE);
   command.len = 8;
   asrsWriteInt32(&command.data[0], xDistance);
@@ -52,11 +72,19 @@ bool ASRS_Master::sendTravelCommand(int32_t xDistance, int32_t zDistance, uint32
   }
 
   ASRS_Packet acknowledgement;
-  return waitForPacket(ASRS_CMD_ACK, acknowledgement, timeoutMs);
+  if (!waitForPacket(ASRS_CMD_ACK, command.seq, acknowledgement, timeoutMs)) {
+    return false;
+  }
+
+  _operationActive = true;
+  _activeOperationSequence = command.seq;
+  _activeOperationCommand = ASRS_CMD_SET_MOVE;
+  _lastError = ASRS_ERROR_NONE;
+  return true;
 }
 
 bool ASRS_Master::readOperationStatus(ASRS_OperationStatus &status) {
-  if (!_communication->available()) {
+  if (!_operationActive || !_communication->available()) {
     return false;
   }
 
@@ -66,15 +94,35 @@ bool ASRS_Master::readOperationStatus(ASRS_OperationStatus &status) {
     return false;
   }
 
-  if (packet.cmd == ASRS_CMD_STATUS || packet.cmd == ASRS_CMD_ERROR) {
-    return decodeStatus(packet, status);
+  if (packet.id != _nodeId ||
+      packet.seq != _activeOperationSequence) {
+    return false;
   }
 
-  _lastError = ASRS_ERROR_UNKNOWN_COMMAND;
-  return false;
+  if (packet.cmd != ASRS_CMD_STATUS &&
+      packet.cmd != ASRS_CMD_ERROR) {
+    _lastError = ASRS_ERROR_UNKNOWN_COMMAND;
+    return false;
+  }
+
+  if (!decodeStatus(packet, status)) {
+    return false;
+  }
+
+  if (status.status == ASRS_STATUS_DONE ||
+      status.status == ASRS_STATUS_ERROR) {
+    clearActiveOperation();
+  }
+
+  return true;
 }
 
-bool ASRS_Master::sendHomingCommand(bool xHome, bool zHome, uint32_t timeoutMs = ASRS_DEFAULT_TIMEOUT_MS){
+bool ASRS_Master::sendHomingCommand(bool xHome, bool zHome, uint32_t timeoutMs){
+  if (_operationActive) {
+    _lastError = ASRS_ERROR_MASTER_BUSY;
+    return false;
+  }
+
   uint8_t homeMask = 0;
   if(xHome){
     homeMask |= ASRS_HOME_X_AXIS;
@@ -99,8 +147,33 @@ bool ASRS_Master::sendHomingCommand(bool xHome, bool zHome, uint32_t timeoutMs =
   }
 
   ASRS_Packet acknowledgement;
-  return waitForPacket(ASRS_CMD_ACK, acknowledgement, timeoutMs);
+  if (!waitForPacket(ASRS_CMD_ACK, command.seq, acknowledgement, timeoutMs)) {
+    return false;
+  }
 
+  _operationActive = true;
+  _activeOperationSequence = command.seq;
+  _activeOperationCommand = ASRS_CMD_RETURN_HOME;
+  _lastError = ASRS_ERROR_NONE;
+  return true;
+
+}
+
+bool ASRS_Master::operationActive() const{
+  return _operationActive;
+}
+
+bool ASRS_Master::coordinatesAvailable() const {
+  return _hasCoordinates;
+}
+
+bool ASRS_Master::lastCoordinates(ASRS_Coordinates &coordinates) const {
+  if (!_hasCoordinates) {
+    return false;
+  }
+
+  coordinates = _coordinates;
+  return true;
 }
 
 ASRS_Error ASRS_Master::lastError() const {
@@ -116,7 +189,8 @@ ASRS_Packet ASRS_Master::makePacket(ASRS_Command command) {
   return packet;
 }
 
-bool ASRS_Master::waitForPacket(uint8_t expectedCommand, ASRS_Packet &packet, uint32_t timeoutMs) {
+bool ASRS_Master::waitForPacket(uint8_t expectedCommand,uint8_t expectedSequence,ASRS_Packet &packet,uint32_t timeoutMs) {
+
   const uint32_t startTime = millis();
 
   while (millis() - startTime < timeoutMs) {
@@ -130,9 +204,18 @@ bool ASRS_Master::waitForPacket(uint8_t expectedCommand, ASRS_Packet &packet, ui
       return false;
     }
 
+    if (packet.id != _nodeId ||
+        packet.seq != expectedSequence) {
+      continue;
+    }
+
     if (packet.cmd == ASRS_CMD_ERROR) {
       ASRS_OperationStatus status;
-      decodeStatus(packet, status);
+
+      if (!decodeStatus(packet, status)) {
+        return false;
+      }
+
       _lastError = status.error;
       return false;
     }
@@ -147,6 +230,12 @@ bool ASRS_Master::waitForPacket(uint8_t expectedCommand, ASRS_Packet &packet, ui
   return false;
 }
 
+void ASRS_Master::clearActiveOperation() {
+  _operationActive = false;
+  _activeOperationSequence = 0;
+  _activeOperationCommand = static_cast<ASRS_Command>(0);
+}
+
 bool ASRS_Master::decodeCoordinates(const ASRS_Packet &packet, ASRS_Coordinates &coordinates) {
   if (packet.len != 8) {
     _lastError = ASRS_ERROR_PAYLOAD_LENGTH;
@@ -155,6 +244,8 @@ bool ASRS_Master::decodeCoordinates(const ASRS_Packet &packet, ASRS_Coordinates 
 
   coordinates.x = asrsReadInt32(&packet.data[0]);
   coordinates.z = asrsReadInt32(&packet.data[4]);
+  _coordinates = coordinates;
+  _hasCoordinates = true;
   _lastError = ASRS_ERROR_NONE;
   return true;
 }

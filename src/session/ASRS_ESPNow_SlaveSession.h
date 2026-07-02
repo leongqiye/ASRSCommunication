@@ -34,6 +34,7 @@ private:
   uint32_t _linkTimeoutMs;
   uint32_t _lastPeerActivityMs;
 
+  void recordTransportActivity();
   bool hasLinkTimedOut() const;
   void printPeerAddress(const char *label);
 };

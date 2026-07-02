@@ -61,6 +61,8 @@ void ASRS_ESPNow_SlaveSession::update() {
     _pairingPrinted = true;
   }
 
+  recordTransportActivity();
+
   if (hasLinkTimedOut() && !_linkLossPrinted && _diagnosticStream != nullptr) {
     _diagnosticStream->print("Warning: ESP-NOW link timeout. No packet from paired master for ");
     _diagnosticStream->print(millis() - _lastPeerActivityMs);
@@ -97,6 +99,22 @@ ASRS_Comm_ESPNow &ASRS_ESPNow_SlaveSession::communication() {
 
 void ASRS_ESPNow_SlaveSession::setLinkTimeout(uint32_t timeoutMs) {
   _linkTimeoutMs = timeoutMs;
+}
+
+void ASRS_ESPNow_SlaveSession::recordTransportActivity() {
+  const uint32_t nowMs = millis();
+  const uint32_t receiveAgeMs = _communication.millisecondsSinceLastReceive();
+  const uint32_t deliveryAgeMs = _communication.millisecondsSinceLastDelivery();
+  const bool newReceive =
+      receiveAgeMs != UINT32_MAX &&
+      nowMs - receiveAgeMs > _lastPeerActivityMs;
+  const bool newDelivery =
+      deliveryAgeMs != UINT32_MAX &&
+      nowMs - deliveryAgeMs > _lastPeerActivityMs;
+
+  if (newReceive || newDelivery) {
+    recordPeerActivity();
+  }
 }
 
 bool ASRS_ESPNow_SlaveSession::hasLinkTimedOut() const {

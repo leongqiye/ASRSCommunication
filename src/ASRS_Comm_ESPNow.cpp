@@ -36,7 +36,8 @@ ASRS_Comm_ESPNow::ASRS_Comm_ESPNow()
     _consecutiveDeliveryFailures(0),
     _lastDeliveryMs(0),
     _channel(1),
-    _pairingRole(PAIRING_ROLE_FIXED_PEER) {
+    _pairingRole(PAIRING_ROLE_FIXED_PEER),
+    _lastReceiveMs(0) {
   memset(_peerAddress, 0xFF, sizeof(_peerAddress));
 }
 
@@ -58,6 +59,7 @@ bool ASRS_Comm_ESPNow::begin(const uint8_t peerAddress[6], uint8_t channel) {
   }
 
   _ready = true;
+  _lastReceiveMs = 0;
   _lastError = ASRS_ERROR_NONE;
   return true;
 }
@@ -80,6 +82,7 @@ bool ASRS_Comm_ESPNow::beginPairingMaster(uint8_t channel) {
   }
 
   _ready = true;
+  _lastReceiveMs = 0;
   _lastError = ASRS_ERROR_NONE;
   return true;
 }
@@ -106,6 +109,7 @@ bool ASRS_Comm_ESPNow::beginPairingSlave(bool pairingAllowed, uint8_t channel, b
   }
 
   _ready = true;
+  _lastReceiveMs = 0;
   _lastError = ASRS_ERROR_NONE;
   return true;
 }
@@ -222,12 +226,33 @@ uint32_t ASRS_Comm_ESPNow::millisecondsSinceLastDelivery() const {
   return millis() - _lastDeliveryMs;
 }
 
+uint32_t ASRS_Comm_ESPNow::millisecondsSinceLastReceive() const {
+  if (_lastReceiveMs == 0) {
+    return UINT32_MAX;
+  }
+
+  return millis() - _lastReceiveMs;
+}
+
 bool ASRS_Comm_ESPNow::linkTimedOut(uint32_t timeoutMs) const {
-  if (_lastDeliveryMs == 0) {
+  if (_lastDeliveryMs == 0 && _lastReceiveMs == 0) {
     return false;
   }
 
-  return _paired && millisecondsSinceLastDelivery() > timeoutMs;
+  return _paired &&
+         millisecondsSinceLastDelivery() > timeoutMs &&
+         millisecondsSinceLastReceive() > timeoutMs;
+}
+
+bool ASRS_Comm_ESPNow::sendHeartbeat() {
+  savePendingPeerIfNeeded();
+
+  if (!_ready || !_paired) {
+    _lastError = ASRS_ERROR_TIMEOUT;
+    return false;
+  }
+
+  return sendControlPacket(ASRS_CMD_HEARTBEAT, _peerAddress);
 }
 
 bool ASRS_Comm_ESPNow::sendPacket(ASRS_Packet &packet) {
@@ -317,19 +342,28 @@ void ASRS_Comm_ESPNow::processSendStatus(const uint8_t *peerMac, esp_now_send_st
 }
 
 bool ASRS_Comm_ESPNow::sendPairingPacket(uint8_t command, const uint8_t destination[6]) {
+  return sendControlPacket(command, destination);
+}
+
+bool ASRS_Comm_ESPNow::sendControlPacket(uint8_t command, const uint8_t destination[6]) {
   ASRS_Packet packet = {};
   asrsClearPacket(packet);
   packet.cmd = command;
   packet.seq = _sequenceCounter++;
-  packet.len = 4;
-  packet.data[0] = 'A';
-  packet.data[1] = 'S';
-  packet.data[2] = 'R';
-  packet.data[3] = 'S';
+
+  if (command == ASRS_CMD_PAIR_REQUEST || command == ASRS_CMD_PAIR_ACK) {
+    packet.len = 4;
+    packet.data[0] = 'A';
+    packet.data[1] = 'S';
+    packet.data[2] = 'R';
+    packet.data[3] = 'S';
+  }
 
   uint8_t frame[ASRS_FrameCodec::MAX_FRAME_SIZE] = {};
   const size_t frameLength = ASRS_FrameCodec::encode(frame, packet);
-  return esp_now_send(destination, frame, frameLength) == ESP_OK;
+  const bool sent = esp_now_send(destination, frame, frameLength) == ESP_OK;
+  _lastError = sent ? ASRS_ERROR_NONE : ASRS_ERROR_ESPNOW_NOT_AVAILABLE;
+  return sent;
 }
 
 bool ASRS_Comm_ESPNow::loadStoredPeer() {
@@ -371,6 +405,7 @@ void ASRS_Comm_ESPNow::resetDeliveryState() {
   _sendStatusAvailable = false;
   _consecutiveDeliveryFailures = 0;
   _lastDeliveryMs = 0;
+  _lastReceiveMs = 0;
 }
 
 bool ASRS_Comm_ESPNow::isBroadcastAddress(const uint8_t address[6]) const {
@@ -426,6 +461,7 @@ void ASRS_Comm_ESPNow::handleReceivedBytes(const uint8_t *senderMac, const uint8
 
       if (_paired && isKnownPeer(senderMac)) {
         sendPairingPacket(ASRS_CMD_PAIR_ACK, _peerAddress);
+        _lastReceiveMs = millis();
         _staticError = ASRS_ERROR_NONE;
         _lastError = ASRS_ERROR_NONE;
         return;
@@ -436,6 +472,7 @@ void ASRS_Comm_ESPNow::handleReceivedBytes(const uint8_t *senderMac, const uint8
       setPeerAddress(senderMac);
       _paired = addPeer(_peerAddress);
       resetDeliveryState();
+      _lastReceiveMs = millis();
       _staticError = _paired ? ASRS_ERROR_NONE : ASRS_ERROR_ESPNOW_NOT_AVAILABLE;
       _lastError = _staticError;
       return;
@@ -448,6 +485,12 @@ void ASRS_Comm_ESPNow::handleReceivedBytes(const uint8_t *senderMac, const uint8
       (!_paired || !isKnownPeer(senderMac))) {
     _staticError = ASRS_ERROR_WRONG_MODE_SELECTED;
     _lastError = _staticError;
+    return;
+  }
+
+  _lastReceiveMs = millis();
+
+  if (handleControlPacket(packet, senderMac)) {
     return;
   }
 
@@ -480,6 +523,35 @@ void ASRS_Comm_ESPNow::handleSendStatus(const uint8_t *peerMac, esp_now_send_sta
     ++_consecutiveDeliveryFailures;
   }
   _lastError = ASRS_ERROR_TIMEOUT;
+}
+
+bool ASRS_Comm_ESPNow::handleControlPacket(const ASRS_Packet &packet, const uint8_t *senderMac) {
+  if (packet.cmd == ASRS_CMD_HEARTBEAT) {
+    if (packet.len != 0 || senderMac == nullptr) {
+      _staticError = ASRS_ERROR_INVALID_FRAME;
+      _lastError = _staticError;
+      return true;
+    }
+
+    sendControlPacket(ASRS_CMD_HEARTBEAT_ACK, _peerAddress);
+    _staticError = ASRS_ERROR_NONE;
+    _lastError = ASRS_ERROR_NONE;
+    return true;
+  }
+
+  if (packet.cmd == ASRS_CMD_HEARTBEAT_ACK) {
+    if (packet.len != 0) {
+      _staticError = ASRS_ERROR_INVALID_FRAME;
+      _lastError = _staticError;
+      return true;
+    }
+
+    _staticError = ASRS_ERROR_NONE;
+    _lastError = ASRS_ERROR_NONE;
+    return true;
+  }
+
+  return false;
 }
 
 #endif

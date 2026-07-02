@@ -24,6 +24,7 @@ public:
 
   void setRepairingTimeout(uint32_t timeoutMs);
   void setLinkTimeout(uint32_t timeoutMs);
+  void setHeartbeatInterval(uint32_t intervalMs);
 
 private:
   enum State : uint8_t {
@@ -37,10 +38,14 @@ private:
   State _state;
   uint32_t _repairingTimeoutMs;
   uint32_t _linkTimeoutMs;
+  uint32_t _heartbeatIntervalMs;
+  uint32_t _lastHeartbeatMs;
   uint32_t _lastPeerActivityMs;
   bool _linkLossPrinted;
 
   bool pairWithSlave(uint32_t timeoutMs);
+  void sendHeartbeatIfDue();
+  void recordTransportActivity();
   bool hasLinkTimedOut() const;
   void recoverPairingAfterLinkLoss();
   void printPeerAddress(const char *label);

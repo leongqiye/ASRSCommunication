@@ -1,4 +1,34 @@
 #include "ASRS_Slave.h"
+#include <ASRS_Motion.h>
+
+static int32_t asrsHomeXPositionMm = 0;
+static int32_t asrsHomeZPositionMm = 0;
+static constexpr uint8_t ASRS_VL53L1X_TOF1_XSHUT_PIN = 10;
+static constexpr uint8_t ASRS_VL53L1X_TOF2_XSHUT_PIN = 11;
+static constexpr uint8_t ASRS_VL53L1X_TOF3_XSHUT_PIN = 12;
+static constexpr uint8_t ASRS_VL53L1X_SDA_PIN = 8;
+static constexpr uint8_t ASRS_VL53L1X_SCL_PIN = 9;
+static constexpr uint8_t ASRS_VL53L1X_TOF1_ADDRESS = 0x64;
+static constexpr uint8_t ASRS_VL53L1X_TOF2_ADDRESS = 0x65;
+static constexpr uint8_t ASRS_VL53L1X_TOF3_ADDRESS = 0x66;
+static constexpr uint8_t ASRS_VL53L1X_SENSOR_COUNT = 3;
+static constexpr uint16_t ASRS_VL53L1X_INVALID_DISTANCE_MM = 65535;
+
+static void printTofReading(uint8_t tofNumber, uint16_t distanceMm, uint8_t rangeStatus) {
+  Serial.print("tof");
+  Serial.print(tofNumber);
+  Serial.print(": ");
+  if (distanceMm == ASRS_VL53L1X_INVALID_DISTANCE_MM) {
+    Serial.print("invalid");
+    Serial.print(", status: ");
+    Serial.println(rangeStatus);
+    return;
+  }
+
+  Serial.print(distanceMm);
+  Serial.print(" mm, status: ");
+  Serial.println(rangeStatus);
+}
 
 ASRS_Slave::ASRS_Slave(ASRS_Comm_Base &selectedCommunication, uint8_t nodeId)
   : _selectedCommunication(&selectedCommunication),
@@ -6,13 +36,24 @@ ASRS_Slave::ASRS_Slave(ASRS_Comm_Base &selectedCommunication, uint8_t nodeId)
     _nodeId(nodeId),
     _sequenceCounter(1),
     _lastError(ASRS_ERROR_NONE),
-    _hasTravelCommand(false) {
-  _coordinates = {0, 0};
-  _limits = {false, false, false, false};
-  _status = {ASRS_STATUS_IDLE, ASRS_ERROR_NONE, 0};
-  _travelCommand = {0, 0};
-  _homingCommand = {false, false};
-}
+    _motionControlEnabled(false),
+    _tofSensorsRequested(false),
+    _tofSensorsReady(false),
+    _coordinateRequestHandled(false),
+    _hasTravelCommand(false),
+    _hasHomingCommand(false),
+    _operationActive(false),
+    _activeOperationSequence(0),
+    _activeOperationCommand(static_cast<ASRS_Command>(0)) {
+      _coordinates = {0,0};
+      _limits = {false, false, false, false};
+      _status = {ASRS_STATUS_IDLE,
+                 ASRS_ERROR_NONE,
+                 0
+                };
+      _travelCommand = {0, 0};
+      _homingCommand = {false, false};
+    }
 
 void ASRS_Slave::setWrongModeCommunication(ASRS_Comm_Base &communication) {
   _wrongModeCommunication = &communication;
@@ -21,6 +62,7 @@ void ASRS_Slave::setWrongModeCommunication(ASRS_Comm_Base &communication) {
 void ASRS_Slave::update() {
   processSelectedCommunication();
   processWrongModeCommunication();
+  processMotionControl();
 }
 
 void ASRS_Slave::setCoordinates(int32_t x, int32_t z) {
@@ -35,6 +77,92 @@ void ASRS_Slave::setLimitSwitches(bool xMinimum, bool xMaximum, bool zMinimum, b
   _limits.zMaximum = zMaximum;
 }
 
+void ASRS_Slave::enableMotionControl(bool enabled) {
+  _motionControlEnabled = enabled;
+  if (_motionControlEnabled) {
+    asrsMotionBegin();
+    refreshMotionState();
+  }
+}
+
+bool ASRS_Slave::beginTofCoordinateSensors() {
+  _tofSensorsRequested = true;
+#if ASRS_HAS_SPARKFUN_VL53L1X
+  VL53L1X_Manager::SensorConfig tofSensorConfig[] = {
+      {ASRS_VL53L1X_TOF1_XSHUT_PIN, ASRS_VL53L1X_TOF1_ADDRESS},
+      {ASRS_VL53L1X_TOF2_XSHUT_PIN, ASRS_VL53L1X_TOF2_ADDRESS},
+      {ASRS_VL53L1X_TOF3_XSHUT_PIN, ASRS_VL53L1X_TOF3_ADDRESS}
+  };
+
+  _tofSensorsReady =
+      _tofSensors.begin(
+          tofSensorConfig,
+          ASRS_VL53L1X_SENSOR_COUNT,
+          ASRS_VL53L1X_SDA_PIN,
+          ASRS_VL53L1X_SCL_PIN);
+  if (!_tofSensorsReady) {
+    _lastError = ASRS_ERROR_SENSOR_MEASUREMENT_FAILED;
+  }
+  return _tofSensorsReady;
+#else
+  _tofSensorsReady = false;
+  _lastError = ASRS_ERROR_SENSOR_MEASUREMENT_FAILED;
+  return false;
+#endif
+}
+
+bool ASRS_Slave::tofCoordinateSensorsReady() const {
+  return _tofSensorsReady;
+}
+
+bool ASRS_Slave::measureCoordinatesFromTof(bool printReadings) {
+  if (!_tofSensorsReady) {
+    _lastError = ASRS_ERROR_SENSOR_MEASUREMENT_FAILED;
+    return false;
+  }
+
+#if ASRS_HAS_SPARKFUN_VL53L1X
+  uint16_t measuredDistancesMm[ASRS_VL53L1X_SENSOR_COUNT];
+  uint8_t measuredRangeStatus[ASRS_VL53L1X_SENSOR_COUNT];
+
+  for (uint8_t sensorIndex = 0; sensorIndex < ASRS_VL53L1X_SENSOR_COUNT; ++sensorIndex) {
+    if (_tofSensors.updateSensorExclusiveRanging(sensorIndex)) {
+      measuredDistancesMm[sensorIndex] = _tofSensors.getDistance(sensorIndex);
+      measuredRangeStatus[sensorIndex] = _tofSensors.getRangeStatus(sensorIndex);
+    } else {
+      measuredDistancesMm[sensorIndex] = ASRS_VL53L1X_INVALID_DISTANCE_MM;
+      measuredRangeStatus[sensorIndex] = _tofSensors.getRangeStatus(sensorIndex);
+    }
+  }
+
+  if (printReadings) {
+    for (uint8_t sensorIndex = 0; sensorIndex < ASRS_VL53L1X_SENSOR_COUNT; ++sensorIndex) {
+      printTofReading(sensorIndex + 1, measuredDistancesMm[sensorIndex], measuredRangeStatus[sensorIndex]);
+    }
+  }
+
+  if (measuredDistancesMm[0] == ASRS_VL53L1X_INVALID_DISTANCE_MM ||
+      measuredDistancesMm[1] == ASRS_VL53L1X_INVALID_DISTANCE_MM) {
+    _lastError = ASRS_ERROR_SENSOR_MEASUREMENT_FAILED;
+    return false;
+  }
+
+  _coordinates.x = static_cast<int32_t>(measuredDistancesMm[0]);
+  _coordinates.z = static_cast<int32_t>(measuredDistancesMm[1]);
+  _lastError = ASRS_ERROR_NONE;
+  return true;
+#else
+  _lastError = ASRS_ERROR_SENSOR_MEASUREMENT_FAILED;
+  return false;
+#endif
+}
+
+void ASRS_Slave::setHomePosition(int32_t xHomeMm, int32_t zHomeMm) {
+  asrsHomeXPositionMm = xHomeMm;
+  asrsHomeZPositionMm = zHomeMm;
+}
+
+//function to set the operation status of the slave
 void ASRS_Slave::setOperationStatus(ASRS_Status status, ASRS_Error error, uint8_t warningCode) {
   _status.status = status;
   _status.error = error;
@@ -59,6 +187,15 @@ bool ASRS_Slave::readTravelCommand(ASRS_TravelCommand &command) {
   return true;
 }
 
+bool ASRS_Slave::coordinateRequestHandled() {
+  if (!_coordinateRequestHandled) {
+    return false;
+  }
+
+  _coordinateRequestHandled = false;
+  return true;
+}
+
 bool ASRS_Slave::homingCommandAvailable() const{
   return _hasHomingCommand;
 }
@@ -73,6 +210,54 @@ bool ASRS_Slave::readHomingCommand(ASRS_HomingCommand &command){
   _hasHomingCommand = false;
   return true;
 }
+
+bool ASRS_Slave::operationActive() const{
+  return _operationActive;
+}
+//this function is to report execution has started (operation set to busy)
+bool ASRS_Slave::reportOperationBusy(){
+  if(!_operationActive){
+    return false;
+  }
+  //set the status to busy, no error and warning code =0
+  setOperationStatus(ASRS_STATUS_BUSY,ASRS_ERROR_NONE,0);
+  //send the status in packet to the master.
+  return sendStatus(*_selectedCommunication,_activeOperationSequence);
+}
+
+//Report successful completion to the master.
+bool ASRS_Slave::completeActiveOperation(){
+  if(!_operationActive){
+    return false;
+  }
+
+  setOperationStatus(ASRS_STATUS_DONE, ASRS_ERROR_NONE,0);
+
+  const bool sent = sendStatus(*_selectedCommunication, _activeOperationSequence);
+  if(sent){
+    clearActiveOperation();
+  }
+  return sent;
+}
+
+//report failure
+bool ASRS_Slave::failActiveOperation(ASRS_Error error){
+  if(!_operationActive){
+    return false;
+  }
+
+  setOperationStatus(ASRS_STATUS_ERROR, error, 0);
+
+  const bool sent = sendStatus(*_selectedCommunication, _activeOperationSequence);
+
+  if(sent){
+    clearActiveOperation();
+  }
+
+  return sent;
+}
+
+
 ASRS_Error ASRS_Slave::lastError() const {
   return _lastError;
 }
@@ -103,6 +288,94 @@ void ASRS_Slave::processWrongModeCommunication() {
   }
 }
 
+void ASRS_Slave::processMotionControl() {
+  if (!_motionControlEnabled) {
+    return;
+  }
+
+  asrsMotionUpdate();
+  refreshMotionState();
+
+  if (!_operationActive) {
+    return;
+  }
+
+  if (asrsMotionFinished() && asrsMotionLimitFault()) {
+    if (!failActiveOperation(ASRS_ERROR_LIMIT_REACHED)) {
+      clearActiveOperation();
+    }
+    asrsMotionClearFinished();
+    return;
+  }
+
+  if (asrsMotionFinished()) {
+    const ASRS_Command completedCommand = _activeOperationCommand;
+    if (completeActiveOperation()) {
+      if (completedCommand == ASRS_CMD_RETURN_HOME) {
+        Serial.println("done home");
+      } else if (completedCommand == ASRS_CMD_SET_MOVE) {
+        Serial.println("done moved");
+      }
+      asrsMotionClearFinished();
+    }
+  }
+}
+
+bool ASRS_Slave::startAcceptedMotion(
+    int32_t xDistanceMm,
+    int32_t zDistanceMm,
+    ASRS_Error startError) {
+  if (!asrsMotionStartMove(xDistanceMm, zDistanceMm)) {
+    failActiveOperation(startError);
+    return false;
+  }
+
+  refreshMotionState();
+  return reportOperationBusy();
+}
+
+bool ASRS_Slave::startAcceptedXMinimumHoming(ASRS_Error startError) {
+  if (!asrsMotionStartHomeXToMinimum()) {
+    failActiveOperation(startError);
+    return false;
+  }
+
+  refreshMotionState();
+  return reportOperationBusy();
+}
+
+bool ASRS_Slave::startAcceptedZMinimumHoming(ASRS_Error startError) {
+  if (!asrsMotionStartHomeZToMinimum()) {
+    failActiveOperation(startError);
+    return false;
+  }
+
+  refreshMotionState();
+  return reportOperationBusy();
+}
+
+bool ASRS_Slave::startAcceptedZThenXHoming(ASRS_Error startError) {
+  if (!asrsMotionStartHomeZThenXToMinimum()) {
+    failActiveOperation(startError);
+    return false;
+  }
+
+  refreshMotionState();
+  return reportOperationBusy();
+}
+
+void ASRS_Slave::refreshMotionState() {
+  if (!_tofSensorsReady) {
+    _coordinates.x = asrsMotionEstimatedXMillimetres();
+    _coordinates.z = asrsMotionEstimatedZMillimetres();
+  }
+  _limits.xMinimum = asrsMotionXMinLimitActive();
+  _limits.xMaximum = asrsMotionXMaxLimitActive();
+  _limits.zMinimum = asrsMotionZMinLimitActive();
+  _limits.zMaximum = asrsMotionZMaxLimitActive();
+}
+
+//function to process the packet received from master.
 void ASRS_Slave::processPacket(ASRS_Comm_Base &communication, ASRS_Packet &packet, bool wrongMode) {
   if (wrongMode) {
     sendError(communication, ASRS_ERROR_WRONG_MODE_SELECTED, packet.seq);
@@ -112,25 +385,73 @@ void ASRS_Slave::processPacket(ASRS_Comm_Base &communication, ASRS_Packet &packe
 
   switch (packet.cmd) {
     case ASRS_CMD_REQ_COORDINATES:
-      sendCoordinates(communication, packet.seq);
+      if (_tofSensorsRequested) {
+        if (_operationActive) {
+          sendError(communication, ASRS_ERROR_SLAVE_BUSY, packet.seq);
+          _lastError = ASRS_ERROR_SLAVE_BUSY;
+          return;
+        }
+        if (!measureCoordinatesFromTof(true)) {
+          sendError(communication, ASRS_ERROR_SENSOR_MEASUREMENT_FAILED, packet.seq);
+          _lastError = ASRS_ERROR_SENSOR_MEASUREMENT_FAILED;
+          return;
+        }
+      }
+      if (sendCoordinates(communication, packet.seq)) {
+        _coordinateRequestHandled = true;
+      }
       break;
 
     case ASRS_CMD_REQ_LIMITS:
       sendLimitSwitches(communication, packet.seq);
       break;
-
-    case ASRS_CMD_SET_MOVE:
-      if (packet.len != 8) {
+    //handle the moving command
+    case ASRS_CMD_SET_MOVE:{
+      //check is pakcet length is not enough, send error to master
+      if(packet.len != 8){
         sendError(communication, ASRS_ERROR_PAYLOAD_LENGTH, packet.seq);
         _lastError = ASRS_ERROR_PAYLOAD_LENGTH;
         return;
       }
-      _travelCommand.xDistance = asrsReadInt32(&packet.data[0]);
-      _travelCommand.zDistance = asrsReadInt32(&packet.data[4]);
+      if(_operationActive){
+        sendError(communication,ASRS_ERROR_SLAVE_BUSY, packet.seq);
+        _lastError = ASRS_ERROR_SLAVE_BUSY;
+        return;
+      }
+      const int32_t targetX = asrsReadInt32(&packet.data[0]);
+      const int32_t targetZ = asrsReadInt32(&packet.data[4]);
+      if (_tofSensorsRequested && !measureCoordinatesFromTof(true)) {
+        sendError(communication, ASRS_ERROR_SENSOR_MEASUREMENT_FAILED, packet.seq);
+        _lastError = ASRS_ERROR_SENSOR_MEASUREMENT_FAILED;
+        return;
+      }
+      const int32_t xMoveMm = targetX - _coordinates.x;
+      const int32_t zMoveMm = targetZ - _coordinates.z;
+
+      _travelCommand.xDistance = targetX;
+      _travelCommand.zDistance = targetZ;
+
+      _activeOperationCommand = ASRS_CMD_SET_MOVE;
+      _activeOperationSequence = packet.seq;
+
+      _operationActive = true;
       _hasTravelCommand = true;
-      sendAcknowledgement(communication, packet.seq);
+      _hasHomingCommand = false;
+
+      if (sendAcknowledgement(communication,_activeOperationSequence)) {
+        _lastError = ASRS_ERROR_NONE;
+        if (_motionControlEnabled) {
+          startAcceptedMotion(
+              xMoveMm,
+              zMoveMm,
+              ASRS_ERROR_SLAVE_BUSY);
+        }
+      } else {
+        clearActiveOperation();
+      }
       break;
-    
+    }
+    //handle the homing command.
     case ASRS_CMD_RETURN_HOME:{
       if(packet.len != 1){
         sendError(communication, ASRS_ERROR_PAYLOAD_LENGTH,packet.seq);
@@ -140,20 +461,41 @@ void ASRS_Slave::processPacket(ASRS_Comm_Base &communication, ASRS_Packet &packe
 
       const uint8_t homeMask = packet.data[0];
 
-      if(homeMask == 0 || (homeMask & ~ASRS_HOME_VALID_MASK)!=0){
-        //~ASRS_HOME_VALID_MASK = 1111 1100
-        //hence, 0x01,0x02,0x03 can produce 0000 0000 after bitwise AND
-        //that is valid homeMask.
+      if(homeMask == 0 || (homeMask &~ASRS_HOME_VALID_MASK) != 0){
         sendError(communication, ASRS_ERROR_INVALID_HOMING_REQUEST,packet.seq);
         _lastError = ASRS_ERROR_INVALID_HOMING_REQUEST;
         return;
       }
-      _homingCommand.xHome = (homeMask & ASRS_HOME_X_AXIS) !=0;
-      _homingCommand.zHome = (homeMask & ASRS_HOME_Z_AXIS) !=0;
+
+      if(_operationActive){
+        sendError(communication, ASRS_ERROR_SLAVE_BUSY,packet.seq);
+        _lastError = ASRS_ERROR_SLAVE_BUSY;
+        return;
+      }
+      _homingCommand.xHome = (homeMask & ASRS_HOME_X_AXIS) != 0;
+      _homingCommand.zHome = (homeMask & ASRS_HOME_Z_AXIS) != 0;
+
+      _activeOperationCommand = ASRS_CMD_RETURN_HOME;
+      _activeOperationSequence = packet.seq;
+
+      _operationActive = true;
+      _hasTravelCommand = false;
       _hasHomingCommand = true;
-      
-      sendAcknowledgement(communication,packet.seq);
-      _lastError = ASRS_ERROR_NONE;
+
+      if (sendAcknowledgement(communication,_activeOperationSequence)) {
+        _lastError = ASRS_ERROR_NONE;
+        if (_motionControlEnabled) {
+          if (_homingCommand.xHome && _homingCommand.zHome) {
+            startAcceptedZThenXHoming(ASRS_ERROR_INVALID_HOMING_REQUEST);
+          } else if (_homingCommand.zHome) {
+            startAcceptedZMinimumHoming(ASRS_ERROR_INVALID_HOMING_REQUEST);
+          } else {
+            startAcceptedXMinimumHoming(ASRS_ERROR_INVALID_HOMING_REQUEST);
+          }
+        }
+      } else {
+        clearActiveOperation();
+      }
       break;
     }
 
@@ -221,4 +563,19 @@ bool ASRS_Slave::sendError(ASRS_Comm_Base &communication, ASRS_Error error, uint
   packet.len = 1;
   packet.data[0] = static_cast<uint8_t>(error);
   return communication.sendPacket(packet);
+}
+
+//clear the completed operation
+void ASRS_Slave::clearActiveOperation(){
+  _operationActive = false;
+  _activeOperationSequence = 0;
+  _activeOperationCommand = static_cast<ASRS_Command>(0); // same as giving 0x00
+
+  _hasTravelCommand = false;
+  _hasHomingCommand = false;
+
+  _travelCommand = {0,0};
+  _homingCommand = {false, false};
+
+  setOperationStatus(ASRS_STATUS_IDLE, ASRS_ERROR_NONE,0);
 }

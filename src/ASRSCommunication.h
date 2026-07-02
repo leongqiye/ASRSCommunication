@@ -11,13 +11,7 @@
 #include "session/ASRS_ESPNow_MasterSession.h"
 #include "session/ASRS_ESPNow_SlaveSession.h"
 #include "VL53L1X_Manager.h"
-//link error done
-//sendHomingCommand(bool xHome, bool zHome, timeout) // if both true, home the Z first then follow by X.
-
-//bool readLimitSwitches() -> return bool xRight,xLeft,zTop, zBottom
-
-//research for the paring function for the espnow communication. urgent DONE IMPLEMENTED
-
-//add the nema17 control code: include the convert linear to angular motion.
+//1.to link the sensor to the slave, the send to master.
+//2. master can send some location (using serial)
 
 #endif

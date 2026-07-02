@@ -40,7 +40,15 @@ public:
     // Update ONLY one sensor
     bool updateSensor(uint8_t index);
 
+    // Keep sensors powered, but range only one sensor during this update.
+    bool updateSensorExclusiveRanging(uint8_t index);
+
+    // Power only one sensor, measure it, then shut it down again.
+    bool updateSensorExclusivePower(uint8_t index);
+
     uint16_t getDistance(uint8_t index);
+
+    uint8_t getRangeStatus(uint8_t index);
 
     uint8_t getSensorCount();
 
@@ -56,9 +64,15 @@ private:
 
     uint16_t _distance[MAX_SENSORS];
 
+    uint8_t _rangeStatus[MAX_SENSORS];
+
     uint8_t _sensorCount;
 
-    bool initSensor(uint8_t index);
+    bool initSensor(uint8_t index, bool printStatus = true);
+
+    void shutdownAllSensors();
+
+    void stopAllRanging();
 
     uint16_t readSingleSensor(uint8_t index);
 };

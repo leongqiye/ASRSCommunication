@@ -26,7 +26,9 @@ public:
   bool lastSendDelivered() const;
   uint8_t consecutiveDeliveryFailures() const;
   uint32_t millisecondsSinceLastDelivery() const;
+  uint32_t millisecondsSinceLastReceive() const;
   bool linkTimedOut(uint32_t timeoutMs) const;
+  bool sendHeartbeat();
 
   bool sendPacket(ASRS_Packet &packet) override;
   bool available() override;
@@ -62,6 +64,7 @@ private:
   bool initialiseEspNow(uint8_t channel);
   bool addPeer(const uint8_t peerAddress[6]);
   bool sendPairingPacket(uint8_t command, const uint8_t destination[6]);
+  bool sendControlPacket(uint8_t command, const uint8_t destination[6]);
   bool loadStoredPeer();
   bool saveStoredPeer();
   void savePendingPeerIfNeeded();
@@ -71,12 +74,14 @@ private:
   void setPeerAddress(const uint8_t peerAddress[6]);
   void handleReceivedBytes(const uint8_t *senderMac, const uint8_t *data, int length);
   void handleSendStatus(const uint8_t *peerMac, esp_now_send_status_t status);
+  bool handleControlPacket(const ASRS_Packet &packet, const uint8_t *senderMac);
 
   static ASRS_Comm_ESPNow *_instance;
   static ASRS_Packet _pendingPacket;
   static bool _hasPendingPacket;
   static ASRS_Error _staticError;
   static const uint8_t BROADCAST_ADDRESS[6];
+  volatile uint32_t _lastReceiveMs;
 
 };
 #endif

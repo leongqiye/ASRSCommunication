@@ -54,6 +54,8 @@ bool VL53L1X_Manager::begin(SensorConfig *configs,
         digitalWrite(_configs[i].xshutPin, LOW);
 
         _distance[i] = 65535;
+
+        _rangeStatus[i] = 255;
     }
 
     delay(500);
@@ -80,7 +82,7 @@ bool VL53L1X_Manager::begin(SensorConfig *configs,
 // Initialize Sensor
 // =====================================================
 
-bool VL53L1X_Manager::initSensor(uint8_t index)
+bool VL53L1X_Manager::initSensor(uint8_t index, bool printStatus)
 {
     // Power ON sensor
     digitalWrite(_configs[index].xshutPin, HIGH);
@@ -108,13 +110,32 @@ bool VL53L1X_Manager::initSensor(uint8_t index)
 
     delay(50);
 
-    Serial.print("Sensor ");
+    if (printStatus)
+    {
+        Serial.print("Sensor ");
 
-    Serial.print(index);
+        Serial.print(index);
 
-    Serial.println(" Initialized");
+        Serial.println(" Initialized");
+    }
 
     return true;
+}
+
+void VL53L1X_Manager::shutdownAllSensors()
+{
+    for (uint8_t i = 0; i < _sensorCount; i++)
+    {
+        digitalWrite(_configs[i].xshutPin, LOW);
+    }
+}
+
+void VL53L1X_Manager::stopAllRanging()
+{
+    for (uint8_t i = 0; i < _sensorCount; i++)
+    {
+        _sensors[i].stopRanging();
+    }
 }
 
 // =====================================================
@@ -139,6 +160,8 @@ uint16_t VL53L1X_Manager::readSingleSensor(uint8_t index)
         {
             _sensors[index].stopRanging();
 
+            _rangeStatus[index] = 255;
+
             return 65535;
         }
 
@@ -146,6 +169,9 @@ uint16_t VL53L1X_Manager::readSingleSensor(uint8_t index)
     }
 
     // Read distance
+    _rangeStatus[index] =
+        _sensors[index].getRangeStatus();
+
     uint16_t distance =
         _sensors[index].getDistance();
 
@@ -178,6 +204,51 @@ bool VL53L1X_Manager::updateSensor(uint8_t index)
     return true;
 }
 
+bool VL53L1X_Manager::updateSensorExclusiveRanging(uint8_t index)
+{
+    if (index >= _sensorCount)
+    {
+        return false;
+    }
+
+    stopAllRanging();
+    delay(2);
+
+    _distance[index] =
+        readSingleSensor(index);
+
+    stopAllRanging();
+
+    return true;
+}
+
+bool VL53L1X_Manager::updateSensorExclusivePower(uint8_t index)
+{
+    if (index >= _sensorCount)
+    {
+        return false;
+    }
+
+    shutdownAllSensors();
+    delay(10);
+
+    if (!initSensor(index, false))
+    {
+        _distance[index] = 65535;
+        shutdownAllSensors();
+        delay(10);
+        return false;
+    }
+
+    _distance[index] =
+        readSingleSensor(index);
+
+    shutdownAllSensors();
+    delay(10);
+
+    return true;
+}
+
 // =====================================================
 // Update ALL sensors
 // =====================================================
@@ -204,6 +275,16 @@ uint16_t VL53L1X_Manager::getDistance(uint8_t index)
     }
 
     return _distance[index];
+}
+
+uint8_t VL53L1X_Manager::getRangeStatus(uint8_t index)
+{
+    if (index >= _sensorCount)
+    {
+        return 255;
+    }
+
+    return _rangeStatus[index];
 }
 
 // =====================================================

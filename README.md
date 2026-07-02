@@ -28,6 +28,16 @@ Restart the Arduino IDE after copying the folder. The examples should then appea
 File > Examples > ASRSCommunication
 ```
 
+Install the external libraries required by the current examples through the Arduino Library Manager:
+
+| Library | Used by |
+| --- | --- |
+| `U8g2` | `Master_ESPNow`, for the SSD1306 OLED display |
+| `SparkFun VL53L1X 4m Laser Distance Sensor` | `Slave` and `Sensor_Test`, for VL53L1X time-of-flight sensors |
+| `AccelStepper` | `Slave`, through the companion `ASRSMotion` motion-control library |
+
+The `Slave` example also requires the local companion library `ASRSMotion`. Copy the complete `ASRSMotion` folder into `Documents/Arduino/libraries/` together with `ASRSCommunication` before compiling the slave sketch in the Arduino IDE.
+
 ## PlatformIO Usage
 
 For a local PlatformIO project, place the library in the project `lib` directory:
@@ -94,13 +104,11 @@ On ESP32-S3 boards, pass explicit UART pins to `begin()`. On Arduino boards with
 
 | Example | Target board type | Communication interface |
 | --- | --- | --- |
-| `Master_UART_Arduino` | Arduino boards with fixed `Serial1` pins, such as Arduino Uno R4 | UART |
-| `Master_UART_ESP32` | ESP32 or ESP32-S3 boards with configurable UART pins | UART |
-| `Master_UART` | Generic UART master reference | UART |
 | `Slave` | DIP-selected slave reference; GPIO2 HIGH selects ESP-NOW and GPIO2 LOW selects UART on ESP32 boards | UART or ESP-NOW |
 | `Master_ESPNow` | ESP32 or ESP32-S3 boards only; uses dynamic ESP-NOW pairing | ESP-NOW |
+| `Sensor_Test` | ESP32-S3 standalone VL53L1X diagnostic firmware | I2C sensor test |
 
-For Arduino Uno R4, `Serial1` uses D0 as RX and D1 as TX. For the ESP32-S3 example, the default assignment is GPIO18 as RX and GPIO17 as TX.
+The previous Arduino IDE UART master examples were removed from the packaged example set. PlatformIO UART test firmware may still exist in the wider research project, but it is no longer part of this Arduino IDE handover package.
 
 ## Versioning Policy
 

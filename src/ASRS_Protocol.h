@@ -33,6 +33,8 @@ enum ASRS_Command : uint8_t {
   ASRS_CMD_STATUS = 0x30,
   ASRS_CMD_PAIR_REQUEST = 0x40,
   ASRS_CMD_PAIR_ACK = 0x41,
+  ASRS_CMD_HEARTBEAT = 0x42,
+  ASRS_CMD_HEARTBEAT_ACK = 0x43,
   ASRS_CMD_ERROR = 0x7F
 };
 
@@ -55,7 +57,11 @@ enum ASRS_Error : uint8_t {
   ASRS_ERROR_ESPNOW_NOT_AVAILABLE = 5,
   ASRS_ERROR_UNKNOWN_COMMAND = 6,
   ASRS_ERROR_TIMEOUT = 7,
-  ASRS_ERROR_INVALID_HOMING_REQUEST = 8
+  ASRS_ERROR_INVALID_HOMING_REQUEST = 8,
+  ASRS_ERROR_MASTER_BUSY = 9,
+  ASRS_ERROR_SLAVE_BUSY = 10,
+  ASRS_ERROR_LIMIT_REACHED = 11,
+  ASRS_ERROR_SENSOR_MEASUREMENT_FAILED = 12
 };
 
 //data packet of the asrs communication
@@ -173,6 +179,14 @@ inline const char *asrsErrorName(ASRS_Error error) {
       return "Timeout";
     case ASRS_ERROR_INVALID_HOMING_REQUEST:
       return "Invalid homing request";
+    case ASRS_ERROR_MASTER_BUSY:
+      return "Master busy";
+    case ASRS_ERROR_SLAVE_BUSY:
+      return "Slave busy";
+    case ASRS_ERROR_LIMIT_REACHED:
+      return "Limit switch reached";
+    case ASRS_ERROR_SENSOR_MEASUREMENT_FAILED:
+      return "Sensor measurement failed";
     default:
       return "Unknown error";
   }
